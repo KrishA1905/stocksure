@@ -1,0 +1,295 @@
+// StockSure - Prisma schema (MySQL)
+//
+// Owner: Person 1 (schema / migrations). Person 2 builds business logic on top.
+//
+// Design notes:
+// - Historical tables (Issue, IssueLine, ReturnRecord, Renewal, StockMovement,
+//   AuditLog) use onDelete: Restrict so a parent row can never silently wipe
+//   transaction history. Deactivate (active = false) instead of deleting.
+// - Item.availableQuantity is the authoritative "can be issued right now" counter
+//   for QUANTITY items. For INDIVIDUAL items it mirrors the count of
+//   USABLE + active + not-issued assets (kept in sync by the service layer).
+// - Asset.isIssued lets the issue workflow claim an asset atomically with a
+//   conditional updateMany (WHERE isIssued = false) so the same asset can never
+//   be issued to two students at once, even under concurrent requests.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  STUDENT
+  COORDINATOR
+}
+
+enum TrackingMode {
+  INDIVIDUAL
+  QUANTITY
+}
+
+enum ConditionStatus {
+  USABLE
+  DAMAGED
+  LOST
+  MAINTENANCE
+  RETIRED
+}
+
+enum IssueStatus {
+  ACTIVE
+  PARTIALLY_RETURNED
+  RETURNED
+}
+
+enum RenewalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum MovementType {
+  INITIAL
+  ADJUSTMENT
+  ISSUE
+  RETURN
+  WRITE_OFF
+  RESTORE
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique @db.VarChar(191)
+  passwordHash String   @db.VarChar(255)
+  role         Role     @default(STUDENT)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  student            Student?
+  issuesIssued       Issue[]         @relation("IssuedBy")
+  returnsReceived    ReturnRecord[]  @relation("ReceivedBy")
+  renewalsRequested  Renewal[]       @relation("RenewalRequestedBy")
+  renewalsApproved   Renewal[]       @relation("RenewalApprovedBy")
+  stockMovements     StockMovement[]
+  auditLogs          AuditLog[]
+
+  @@map("users")
+}
+
+model Student {
+  id             Int      @id @default(autoincrement())
+  userId         Int      @unique
+  name           String   @db.VarChar(120)
+  enrollmentNo   String   @unique @db.VarChar(50)
+  programme      String   @db.VarChar(120)
+  semester       Int
+  contactDetails String?  @db.VarChar(255)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  issues Issue[]
+
+  @@map("students")
+}
+
+model Location {
+  id          Int      @id @default(autoincrement())
+  department  String   @db.VarChar(120)
+  laboratory  String   @db.VarChar(120)
+  room        String   @db.VarChar(60)
+  storageUnit String   @db.VarChar(120)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  assets Asset[]
+  items  Item[]
+
+  @@unique([department, laboratory, room, storageUnit])
+  @@map("locations")
+}
+
+model Item {
+  id                Int          @id @default(autoincrement())
+  itemCode          String       @unique @db.VarChar(50)
+  name              String       @db.VarChar(150)
+  category          String       @db.VarChar(80)
+  description       String?      @db.Text
+  makeModel         String?      @db.VarChar(150)
+  trackingMode      TrackingMode
+  totalQuantity     Int          @default(0)
+  availableQuantity Int          @default(0)
+  locationId        Int?
+  active            Boolean      @default(true)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  location       Location?       @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  assets         Asset[]
+  issueLines     IssueLine[]
+  stockMovements StockMovement[]
+
+  @@index([category])
+  @@index([trackingMode])
+  @@index([active])
+  @@map("items")
+}
+
+model Asset {
+  id              Int             @id @default(autoincrement())
+  itemId          Int
+  assetTag        String          @unique @db.VarChar(60)
+  serialNumber    String?         @db.VarChar(120)
+  locationId      Int?
+  conditionStatus ConditionStatus @default(USABLE)
+  isIssued        Boolean         @default(false)
+  active          Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  item       Item        @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  location   Location?   @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  issueLines IssueLine[]
+
+  @@index([itemId])
+  @@index([conditionStatus])
+  @@index([itemId, conditionStatus, isIssued, active])
+  @@map("assets")
+}
+
+model Issue {
+  id         Int         @id @default(autoincrement())
+  studentId  Int
+  issueDate  DateTime
+  dueDate    DateTime
+  issuedById Int
+  status     IssueStatus @default(ACTIVE)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  student  Student     @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  issuedBy User        @relation("IssuedBy", fields: [issuedById], references: [id], onDelete: Restrict)
+  lines    IssueLine[]
+  renewals Renewal[]
+
+  @@index([studentId])
+  @@index([dueDate])
+  @@index([status, dueDate])
+  @@map("issues")
+}
+
+model IssueLine {
+  id               Int      @id @default(autoincrement())
+  issueId          Int
+  itemId           Int
+  assetId          Int?
+  quantity         Int
+  returnedQuantity Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  issue   Issue          @relation(fields: [issueId], references: [id], onDelete: Restrict)
+  item    Item           @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  asset   Asset?         @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  returns ReturnRecord[]
+
+  @@index([issueId])
+  @@index([itemId])
+  @@index([assetId])
+  @@map("issue_lines")
+}
+
+// Named ReturnRecord because `return` is a JavaScript keyword (prisma.return).
+model ReturnRecord {
+  id              Int             @id @default(autoincrement())
+  issueLineId     Int
+  quantity        Int
+  returnDate      DateTime        @default(now())
+  conditionStatus ConditionStatus
+  receivedById    Int
+  remarks         String?         @db.VarChar(500)
+  createdAt       DateTime        @default(now())
+
+  issueLine  IssueLine @relation(fields: [issueLineId], references: [id], onDelete: Restrict)
+  receivedBy User      @relation("ReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
+
+  @@index([issueLineId])
+  @@index([returnDate])
+  @@map("returns")
+}
+
+model Renewal {
+  id            Int           @id @default(autoincrement())
+  issueId       Int
+  requestedById Int
+  requestedAt   DateTime      @default(now())
+  status        RenewalStatus @default(PENDING)
+  oldDueDate    DateTime
+  newDueDate    DateTime?
+  approvedById  Int?
+  approvedAt    DateTime?
+  remarks       String?       @db.VarChar(500)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  issue       Issue @relation(fields: [issueId], references: [id], onDelete: Restrict)
+  requestedBy User  @relation("RenewalRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  approvedBy  User? @relation("RenewalApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+
+  @@index([issueId])
+  @@index([status])
+  @@map("renewals")
+}
+
+model StockMovement {
+  id            Int          @id @default(autoincrement())
+  itemId        Int
+  movementType  MovementType
+  quantityDelta Int
+  reason        String?      @db.VarChar(500)
+  createdById   Int
+  createdAt     DateTime     @default(now())
+
+  item      Item @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([itemId])
+  @@index([createdAt])
+  @@map("stock_movements")
+}
+
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  userId     Int?
+  action     String   @db.VarChar(60)
+  entityType String   @db.VarChar(60)
+  entityId   String?  @db.VarChar(60)
+  metadata   Json?
+  ipAddress  String?  @db.VarChar(64)
+  userAgent  String?  @db.VarChar(255)
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([createdAt])
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+// Server-side session store (used by src/config/sessionStore.js).
+// Kept in Prisma so `prisma migrate dev` never sees an unmanaged table.
+model Session {
+  sid       String   @id @db.VarChar(128)
+  data      String   @db.Text
+  expiresAt DateTime
+
+  @@index([expiresAt])
+  @@map("sessions")
+}
