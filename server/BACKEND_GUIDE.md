@@ -26,7 +26,7 @@ node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 
 | Role | Email | Password |
 |------|-------|----------|
-| Coordinator | coordinator@stocksure.local | Coordinator@123 |
+| Coordinator | coordinator@stocksure.local | C0rdin4t0r#5879 |
 | Student 1 (DFIS2026-001) | student1@stocksure.local | Student@123 |
 | Student 2 (DFIS2026-002) | student2@stocksure.local | Student@123 |
 

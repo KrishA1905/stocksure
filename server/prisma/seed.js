@@ -8,7 +8,7 @@ const bcrypt = require('bcryptjs');
 
 const prisma = new PrismaClient();
 
-const COORDINATOR = { email: 'coordinator@stocksure.local', password: 'Coordinator@123' };
+const COORDINATOR = { email: 'coordinator@stocksure.local', password: 'C0rdin4t0r#5879' };
 const STUDENTS = [
   {
     email: 'student1@stocksure.local',
@@ -40,7 +40,11 @@ const CABLE_COUNT = 20;
 
 async function upsertUser(email, password, role) {
   const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing) return existing;
+  if (existing) {
+    // Keep demo passwords in sync if they were changed in this file.
+    if (await bcrypt.compare(password, existing.passwordHash)) return existing;
+    return prisma.user.update({ where: { id: existing.id }, data: { passwordHash: await bcrypt.hash(password, 10) } });
+  }
   return prisma.user.create({ data: { email, passwordHash: await bcrypt.hash(password, 10), role } });
 }
 

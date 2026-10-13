@@ -34,7 +34,7 @@ BACKEND_GUIDE.md section 2 has a drop-in axios client with CSRF handling and err
 Endpoints marked 🟡 return 501 until Person 2 is done, so mock them meanwhile using the shapes in the contract.
 
 Demo accounts:
-Coordinator: coordinator@stocksure.local / Coordinator@123
+Coordinator: coordinator@stocksure.local / C0rdin4t0r#5879
 Student:     student1@stocksure.local / Student@123
 Student 2:   student2@stocksure.local / Student@123
 

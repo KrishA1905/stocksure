@@ -7,7 +7,7 @@ const { createApp } = require('../src/app');
 const prisma = require('../src/config/prisma');
 
 const ACCOUNTS = {
-  coordinator: { email: 'coordinator@stocksure.local', password: 'Coordinator@123' },
+  coordinator: { email: 'coordinator@stocksure.local', password: 'C0rdin4t0r#5879' },
   student1: { email: 'student1@stocksure.local', password: 'Student@123' },
   student2: { email: 'student2@stocksure.local', password: 'Student@123' },
 };

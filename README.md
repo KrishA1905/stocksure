@@ -26,4 +26,4 @@ npm test
 
 Frontend: `cd client && cp .env.example .env` (`VITE_API_URL=http://localhost:5000/api`), then run `npm run dev` (http://localhost:5173).
 
-Demo accounts: `coordinator@stocksure.local / Coordinator@123`, `student1@stocksure.local / Student@123`, `student2@stocksure.local / Student@123`.
+Demo accounts: `coordinator@stocksure.local / C0rdin4t0r#5879`, `student1@stocksure.local / Student@123`, `student2@stocksure.local / Student@123`.
