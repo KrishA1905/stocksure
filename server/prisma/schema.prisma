@@ -6,9 +6,10 @@
 // - Historical tables (Issue, IssueLine, ReturnRecord, Renewal, StockMovement,
 //   AuditLog) use onDelete: Restrict so a parent row can never silently wipe
 //   transaction history. Deactivate (active = false) instead of deleting.
-// - Item.availableQuantity is the authoritative "can be issued right now" counter
-//   for QUANTITY items. For INDIVIDUAL items it mirrors the count of
-//   USABLE + active + not-issued assets (kept in sync by the service layer).
+// - Item.availableQuantity ("can be issued right now") and unavailableQuantity
+//   ("in stock but damaged/maintenance/lost") are authoritative counters for
+//   QUANTITY items. For INDIVIDUAL items they are recomputed from the asset
+//   rows by the service layer (services/stock.helpers.js).
 // - Asset.isIssued lets the issue workflow claim an asset atomically with a
 //   conditional updateMany (WHERE isIssued = false) so the same asset can never
 //   be issued to two students at once, even under concurrent requests.
@@ -124,6 +125,10 @@ model Item {
   trackingMode      TrackingMode
   totalQuantity     Int          @default(0)
   availableQuantity Int          @default(0)
+  // Units kept in stock but not issuable (returned DAMAGED / MAINTENANCE /
+  // LOST). Restored explicitly by a coordinator. Invariant for every item:
+  // totalQuantity = availableQuantity + unavailableQuantity + out on loan.
+  unavailableQuantity Int        @default(0)
   locationId        Int?
   active            Boolean      @default(true)
   createdAt         DateTime     @default(now())
@@ -168,6 +173,7 @@ model Issue {
   issueDate  DateTime
   dueDate    DateTime
   issuedById Int
+  purpose    String?     @db.VarChar(255)
   status     IssueStatus @default(ACTIVE)
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
@@ -233,7 +239,8 @@ model Renewal {
   newDueDate    DateTime?
   approvedById  Int?
   approvedAt    DateTime?
-  remarks       String?       @db.VarChar(500)
+  remarks       String?       @db.VarChar(500) // student's reason for the request
+  decisionRemarks String?     @db.VarChar(500) // coordinator's note on approve/reject
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 

@@ -2,7 +2,9 @@
 
 Base URL: `http://localhost:5000/api` (frontend: `VITE_API_URL`)
 
-Status legend: ✅ implemented (Person 1) · 🟡 guards and validation are wired, but the handler returns **501** until Person 2 implements it.
+Status: every endpoint is implemented. Auth, security and infrastructure are Person 1's; inventory, issue, return, renewal and dashboard logic is Person 2's.
+
+**Aliases:** the backend also accepts the request field names from Person 2's samples: `items` for `lines`, `condition` for `conditionStatus`, `decision` for `status`, `tag` for `assetTag`, and `trackingMode: "ASSET"` for `INDIVIDUAL`. Responses always use the names in this document.
 
 ---
 
@@ -39,7 +41,6 @@ Query params: `page` (default 1) and `pageSize` (default 20, max 100).
 | 422 | Validation failed (see `errors`) |
 | 429 | Too many login attempts |
 | 500 | Generic server error. No internal details are included |
-| 501 | Endpoint not implemented yet (Person 2 placeholder) |
 
 ### Auth and CSRF (applies to every request)
 
@@ -113,121 +114,162 @@ Role: COORDINATOR. Body: `{ department, laboratory, room, storageUnit }`. `409` 
 
 ---
 
-## 4. Inventory (Person 2)
+## 4. Inventory (Person 2 logic)
 
-### 🟡 `GET /api/inventory`
-Any logged-in user. Query: `search, category, trackingMode (INDIVIDUAL|QUANTITY), active (true|false), available (true|false), locationId, page, pageSize`.
-Expected item shape:
+**Stock model.** For every item: `totalQuantity = availableQuantity + unavailableQuantity + outstandingQuantity`.
+* `availableQuantity` counts units that can be issued now.
+* `unavailableQuantity` counts units in stock that are DAMAGED, in MAINTENANCE or LOST, waiting for a coordinator to restore them.
+* `outstandingQuantity` counts units out on loan.
+
+For INDIVIDUAL items these counters are recomputed from the asset rows.
+
+### ✅ `GET /api/inventory`
+Any logged-in user. Query: `search, category, trackingMode (INDIVIDUAL|QUANTITY; ASSET accepted), active, available (true|false), locationId, page, pageSize`.
 ```json
-{ "id": 1, "itemCode": "DB-DEV", "name": "Development Board", "category": "Electronics",
-  "trackingMode": "INDIVIDUAL", "totalQuantity": 10, "availableQuantity": 10, "active": true,
-  "location": { "id": 1, "laboratory": "Development Lab", "room": "Lab-01", "storageUnit": "Equipment Cupboard A" } }
+{ "items": [
+    { "id": 1, "itemCode": "DB-DEV", "name": "Development Board", "category": "Electronics",
+      "trackingMode": "INDIVIDUAL", "totalQuantity": 10, "availableQuantity": 9,
+      "unavailableQuantity": 0, "outstandingQuantity": 1, "availability": "IN_STOCK", "active": true,
+      "location": { "id": 1, "laboratory": "Development Lab", "room": "Lab-01", "storageUnit": "Equipment Cupboard A" },
+      "assets": [ { "id": 3, "assetTag": "DB-003", "conditionStatus": "USABLE", "isIssued": true,
+                    "active": true, "available": false, "status": "ISSUED" } ] } ],
+  "pagination": { "page": 1, "pageSize": 20, "total": 2, "totalPages": 1 },
+  "categories": ["Accessories", "Electronics"] }
 ```
+* `availability` is `IN_STOCK`, `LOW` (≤ 20% left), `OUT_OF_STOCK` or `INACTIVE`.
+* `assets` is an empty array for QUANTITY items.
 
-### 🟡 `GET /api/inventory/:id`
-Any logged-in user. The item plus its assets (if INDIVIDUAL).
+### ✅ `GET /api/inventory/:id`
+Any logged-in user. Returns the item, all of its assets and the last 15 `stockMovements`.
 
-### 🟡 `POST /api/inventory`
+### ✅ `POST /api/inventory`
 Role: COORDINATOR.
-Body: `{ itemCode, name, category, trackingMode, totalQuantity? (QUANTITY only), description?, makeModel?, locationId? }`
-Returns 201. `409` on a duplicate `itemCode`. Audit: `ITEM_CREATED`.
+```json
+{ "name": "Ethernet Cable", "category": "Networking", "trackingMode": "QUANTITY", "totalQuantity": 10 }
+{ "name": "Oscilloscope", "category": "Test Equipment", "trackingMode": "INDIVIDUAL",
+  "assets": [ { "assetTag": "OSC-001" }, { "assetTag": "OSC-002", "conditionStatus": "DAMAGED" } ] }
+```
+* Optional fields: `itemCode` (auto-generated from the name if omitted), `description`, `makeModel`, `locationId`.
+* Returns 201. Errors: `409` (duplicate code or tag), `422`. Audit: `ITEM_CREATED`.
 
-### 🟡 `PATCH /api/inventory/:id`
+### ✅ `PATCH /api/inventory/:id`
 Role: COORDINATOR. Body: any of `{ name, category, description, makeModel, locationId, active }`.
-`trackingMode` and quantities cannot be changed here.
 
-### 🟡 `POST /api/inventory/:id/adjust`
-Role: COORDINATOR. Body: `{ quantityDelta: int != 0, reason: string }`.
-Records a StockMovement. `409` if the stock would go negative. Audit: `STOCK_ADJUSTED`.
+### ✅ `POST /api/inventory/:id/adjust`
+Role: COORDINATOR, QUANTITY items only. Body: `{ quantityDelta (≠ 0), reason, pool?: "AVAILABLE" | "UNAVAILABLE" }`.
+* A positive delta is new stock.
+* A negative delta is a write-off from `pool`. It returns `409` if there aren't enough units.
+* Audit: `STOCK_ADJUSTED`.
 
-## 5. Assets (Person 2)
+### ✅ `POST /api/inventory/:id/restore`
+Role: COORDINATOR, QUANTITY items only. Body: `{ quantity, reason }`. Moves repaired units from unavailable back to available.
 
-### 🟡 `GET /api/assets`
+## 5. Assets
+
+### ✅ `GET /api/assets`
 Role: COORDINATOR. Query: `itemId, conditionStatus, available, active, locationId, search, page, pageSize`.
-An asset is **available** when it is `USABLE`, active and not issued.
-Shape: `{ id, assetTag, serialNumber, item: {id,name,itemCode}, location, conditionStatus, isIssued, active, available }`
+* Each asset has `available`, `status` (AVAILABLE, ISSUED or UNAVAILABLE) and `holder`. `holder` is `{ issueId, issueLineId, dueDate, student }` while the asset is on loan, otherwise `null`.
+* Issue-form asset picker: `GET /api/assets?itemId=1&available=true`.
 
-### 🟡 `POST /api/assets`
-Role: COORDINATOR. Body: `{ itemId, assetTag, serialNumber?, locationId?, conditionStatus? }`.
-The item must be INDIVIDUAL. `409` on a duplicate tag.
+### ✅ `POST /api/assets`
+Role: COORDINATOR. Body: `{ itemId, assetTag, serialNumber?, locationId?, conditionStatus? }`. The item must be INDIVIDUAL. Returns `409` for a duplicate tag.
 
-### 🟡 `PATCH /api/assets/:id`
+### ✅ `PATCH /api/assets/:id`
 Role: COORDINATOR. Body: any of `{ serialNumber, locationId, conditionStatus, active, reason }`.
-Changing the condition back to USABLE is the explicit coordinator **restore** step. Audit: `ASSET_STATUS_CHANGED`.
+* Setting a DAMAGED, MAINTENANCE or LOST asset back to `USABLE` is the explicit **restore**.
+* An asset on loan can't change condition or be deactivated (409).
+* Audit: `ASSET_STATUS_CHANGED`.
 
-## 6. Issues (Person 2)
+## 6. Issues
 
-### 🟡 `POST /api/issues`
+### ✅ `POST /api/issues`
 Role: COORDINATOR.
 ```json
-{ "studentId": 1,
-  "lines": [ { "itemId": 1, "assetId": 3 },
-             { "itemId": 2, "quantity": 2 } ] }
+{ "studentId": 1, "purpose": "Embedded lab practical",
+  "lines": [ { "itemId": 1, "assetId": 3 }, { "itemId": 2, "quantity": 2 } ] }
 ```
+* INDIVIDUAL lines need `assetId` with quantity 1; QUANTITY lines need `quantity` and no `assetId`. `purpose` is optional.
 * The server sets `issueDate = now`, `dueDate = issueDate + 15 days` and `issuedBy = session user`.
-* 201 returns the issue with `lines`, `issueDate` and `dueDate`. **The UI displays this due date; it does not calculate its own.**
-* `404`: the student or item does not exist. `409`: insufficient stock, or the asset is not available or already issued. `422`: validation errors (quantity ≤ 0, quantity > 1 for an asset, a client-supplied dueDate, duplicate assets).
-* The whole issue is atomic: if any line fails, no stock changes.
+* It is one transaction with row locks: if any line fails, nothing changes. Quantities for the same item are summed before the stock check.
+* Errors:
+  * `404`: unknown or inactive student, item or asset.
+  * `409`: `Insufficient stock for "USB Cable": requested 21, available 18`, `Asset "DB-003" is already issued`, or asset not usable.
+  * `422`: validation.
 
-### 🟡 `GET /api/issues`
-Role: COORDINATOR. Query: `studentId, status (ACTIVE|PARTIALLY_RETURNED|RETURNED), overdue (true|false), page, pageSize`.
-Expected shape:
+**Issue object** (returned by every issue endpoint):
 ```json
-{ "id": 1, "issueDate": "...", "dueDate": "...", "status": "ACTIVE",
-  "isOverdue": false, "overdueDays": 0,
+{ "id": 4, "issueDate": "...", "dueDate": "...", "issueCalendarDate": "2026-10-13", "dueCalendarDate": "2026-10-28",
+  "purpose": "...", "status": "ACTIVE", "displayStatus": "ACTIVE",
+  "totalQuantity": 3, "outstandingQuantity": 3, "isOverdue": false, "overdueDays": 0, "daysUntilDue": 15,
+  "canRequestRenewal": true, "pendingRenewal": null,
   "student": { "id": 1, "name": "Student One", "enrollmentNo": "DFIS2026-001" },
-  "lines": [ { "id": 1, "item": { "id": 1, "name": "Development Board" }, "asset": { "assetTag": "DB-003" },
-               "quantity": 1, "returnedQuantity": 0, "outstandingQuantity": 1 } ] }
+  "issuedBy": { "id": 1, "email": "coordinator@stocksure.local" },
+  "lines": [ { "id": 7, "itemId": 1, "assetId": 3, "quantity": 1, "returnedQuantity": 0, "outstandingQuantity": 1,
+               "itemName": "Development Board", "assetTag": "DB-003",
+               "item": { "id": 1, "name": "Development Board", "trackingMode": "INDIVIDUAL" },
+               "asset": { "id": 3, "assetTag": "DB-003" }, "returns": [] } ],
+  "renewals": [ { "id": 1, "status": "APPROVED", "requestedAt": "...", "oldDueDate": "...", "newDueDate": "..." } ] }
 ```
+* `status` is `ACTIVE`, `PARTIALLY_RETURNED` or `RETURNED`. `displayStatus` additionally shows `OVERDUE`.
+* **Overdue** follows the calendar-day rule in `APP_TIMEZONE` (default Asia/Kolkata): an issue becomes overdue on the day after its due date.
 
-### 🟡 `GET /api/issues/mine`
-Role: STUDENT. The student's own issues only, in the same shape as above.
+### ✅ `GET /api/issues`
+Role: COORDINATOR. Query: `studentId, status, overdue, search, page, pageSize`. Returns paginated issue objects.
 
-### 🟡 `GET /api/issues/:id`
-Coordinators can read any issue. Students can read only their own; another student's issue returns **404**.
+### ✅ `GET /api/issues/overdue`
+Role: COORDINATOR. One row per overdue line: `{ issueId, issueLineId, studentName, enrollmentNo, itemName, assetTag, outstanding, dueDate, dueCalendarDate, overdueDays, renewalStatus }`.
 
-## 7. Returns (Person 2)
+### ✅ `GET /api/issues/mine`
+Role: STUDENT. An array of the student's own issue objects.
 
-### 🟡 `POST /api/returns`
-Role: COORDINATOR.
-```json
-{ "issueLineId": 5, "quantity": 1, "conditionStatus": "USABLE", "remarks": "OK" }
-```
-* Partial returns are allowed. `quantity` must be ≤ the outstanding quantity, otherwise the server returns `409`.
-* `receivedBy` is the session user and `returnDate` is now.
-* Stock or the asset becomes available again only when the returned condition is `USABLE`. DAMAGED, LOST and MAINTENANCE items stay unavailable until a coordinator restores them.
-* 201 returns `{ return, issueLine: { quantity, returnedQuantity, outstandingQuantity }, issueStatus }`. Audit: `RETURN_CREATED`.
+### ✅ `GET /api/issues/:id`
+Coordinators can read any issue. Students can read only their own; any other issue returns 404.
 
-## 8. Renewals (Person 2)
+## 7. Returns
 
-### 🟡 `POST /api/renewals`
+### ✅ `POST /api/returns`
+Role: COORDINATOR. Body: `{ "issueLineId": 7, "quantity": 1, "conditionStatus": "USABLE", "remarks": "OK" }`.
+* Partial returns are allowed. A quantity above the outstanding amount returns `409`.
+* **USABLE** units go back to available.
+* **DAMAGED, MAINTENANCE or LOST:**
+  * QUANTITY items: the units move to `unavailableQuantity`.
+  * INDIVIDUAL items: the asset keeps that condition until a coordinator restores it.
+* When everything has been returned, the issue becomes `RETURNED` and any pending renewal is closed.
+* 201: `{ return, issueLine: { id, item, asset, quantity, returnedQuantity, outstandingQuantity }, issueId, issueStatus, student }`.
+
+## 8. Renewals
+
+### ✅ `POST /api/renewals`
 Role: STUDENT. Body: `{ issueId, remarks? }`.
-* The student can renew only their own active issue. Anyone else's issue returns 404. A renewal that is already PENDING returns 409.
-* Creates `{ status: "PENDING", oldDueDate: <current due date>, newDueDate: null }`. **The issue's due date does not change.**
+* Works only for the student's own issue; another student's issue returns 404.
+* Returns `409` when nothing is outstanding, the issue is already overdue, or a renewal is already pending.
+* Creates a PENDING renewal with `oldDueDate` set to the current due date. **The due date does not change.**
 
-### 🟡 `GET /api/renewals`
+### ✅ `GET /api/renewals`
 Coordinators see all renewals; students see only their own. Query: `status, page, pageSize`.
-Shape: `{ id, status, requestedAt, oldDueDate, newDueDate, remarks, issue: { id, dueDate, student, lines } }`
+Renewal object: `{ id, status, requestedAt, remarks, oldDueDate, newDueDate, approvedAt, currentDueDate, currentDueCalendarDate, requestedBy, approvedBy, issue: { id, dueDate, status, purpose, student, lines } }`.
 
-### 🟡 `PATCH /api/renewals/:id`
+### ✅ `PATCH /api/renewals/:id`
 Role: COORDINATOR. Body: `{ "status": "APPROVED" | "REJECTED", "remarks"? }`.
-* Works only while the renewal is PENDING, otherwise the server returns `409`.
-* APPROVED: `issue.dueDate = existing dueDate + 15 days`, and `renewal.newDueDate`, `approvedBy` and `approvedAt` are set.
-* REJECTED: the due date stays unchanged.
-* Audit: `RENEWAL_APPROVED` / `RENEWAL_REJECTED`.
+* Only a PENDING renewal can be decided; otherwise the server returns `409`.
+* **APPROVED:** `dueDate = existing dueDate + 15 days`. **Show `newDueDate` from the response**; don't calculate it in the frontend.
+* **REJECTED:** the due date is unchanged.
 
-## 9. Dashboard (Person 2)
+## 9. Dashboard
 
-### 🟡 `GET /api/dashboard`
-Coordinator:
+### ✅ `GET /api/dashboard`
+**Coordinator:**
 ```json
-{ "totals": { "items": 2, "totalUnits": 30, "availableUnits": 30, "issuedUnits": 0,
-              "overdueIssues": 0, "pendingRenewals": 0, "unavailableAssets": 0, "activeStudents": 2 },
-  "byCategory": [ { "category": "Electronics", "total": 10, "available": 10 } ],
-  "assetStatus": [ { "status": "USABLE", "count": 10 } ],
-  "overdue": [ { "issueId": 1, "student": "...", "item": "...", "outstandingQuantity": 1, "dueDate": "...", "overdueDays": 3 } ] }
+{ "role": "COORDINATOR", "totalItemTypes": 2, "totalQuantity": 30, "availableQuantity": 27,
+  "outstandingQuantity": 3, "unavailableQuantity": 0, "overdueIssues": 0, "pendingRenewals": 1,
+  "activeStudents": 2, "unavailableAssets": 0, "overdueList": [],
+  "byCategory": [ { "category": "Electronics", "total": 10, "available": 9, "issued": 1, "unavailable": 0 } ],
+  "assetStatus": [ { "status": "USABLE", "count": 10 } ], "lowStock": [],
+  "trend": [ { "date": "2026-09-30", "issued": 0, "returned": 0 } ],
+  "recentActivity": [ { "action": "ISSUE_CREATED", "entityType": "ISSUE", "entityId": "4", "createdAt": "...", "user": { "email": "..." } } ] }
 ```
-Student: `{ activeBorrowings, overdueCount, pendingRenewals, nextDueDate }`, covering their own data only.
+
+**Student** (their own data only): `{ role, myOutstanding, myOverdue, myTotalIssues, activeBorrowings, overdueCount, dueSoonCount, pendingRenewals, nextDueDate, openIssues }`.
 
 ## 10. Audit
 

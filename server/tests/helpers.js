@@ -1,4 +1,8 @@
-// Integration-test helpers. Requires a migrated + seeded database (see BACKEND_GUIDE.md).
+// Integration-test helpers. Run via `npm test`, which first resets the TEST
+// database (DATABASE_URL_TEST) - tests never touch the development data.
+require('dotenv').config();
+if (!process.env.DATABASE_URL_TEST) throw new Error('DATABASE_URL_TEST must be set in server/.env');
+process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
 process.env.NODE_ENV = 'test';
 process.env.LOGIN_RATE_LIMIT = process.env.LOGIN_RATE_LIMIT_TEST || '1000';
 

@@ -1,15 +1,20 @@
-// OWNER: Person 2 (business logic). Guards/validation wired by Person 1.
+// Business logic: Person 2 (services/return.service.js). Guards/validation: Person 1.
 const express = require('express');
+const asyncHandler = require('../utils/asyncHandler');
+const { sendCreated } = require('../utils/response');
 const { validate } = require('../middleware/validate');
 const { requireCoordinator } = require('../middleware/auth');
 const { createReturnSchema } = require('../schemas/return.schema');
-const notImplemented = require('./_stub');
+const { createReturn } = require('../services/return.service');
 
 const router = express.Router();
 
-// POST /api/returns - coordinator only. receivedById = req.user.id.
-// Transaction: quantity <= (quantity - returnedQuantity); record condition;
-// only USABLE returns go back to availability; Audit: RETURN_CREATED.
-router.post('/', requireCoordinator(), validate({ body: createReturnSchema }), notImplemented('Create return'));
+// POST /api/returns - coordinator only. receivedBy = session user. Partial returns allowed.
+router.post(
+  '/',
+  requireCoordinator(),
+  validate({ body: createReturnSchema }),
+  asyncHandler(async (req, res) => sendCreated(res, await createReturn(req.body, req), 'Return recorded successfully'))
+);
 
 module.exports = router;

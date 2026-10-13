@@ -2,7 +2,7 @@
 const ApiError = require('./apiError');
 const asyncHandler = require('./asyncHandler');
 const { sendSuccess, sendCreated, sendError } = require('./response');
-const { addDays, calculateDueDate, calculateRenewedDueDate, daysOverdue, isOverdue } = require('./dates');
+const dates = require('./dates');
 const { runInTransaction } = require('./transaction');
 const { paginate } = require('./pagination');
 const { getAuthenticatedUser, getStudentFromUser } = require('../services/auth.service');
@@ -16,11 +16,7 @@ module.exports = {
   sendSuccess,
   sendCreated,
   sendError,
-  addDays,
-  calculateDueDate,
-  calculateRenewedDueDate,
-  daysOverdue,
-  isOverdue,
+  ...dates,
   runInTransaction,
   paginate,
   getAuthenticatedUser,

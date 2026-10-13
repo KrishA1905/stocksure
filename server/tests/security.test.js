@@ -116,9 +116,9 @@ test('Validation: issue payload rejects negative/zero qty, client due dates, bad
     422,
     'duplicate asset in one issue'
   );
-  // Valid payload reaches Person 2's handler (501 until implemented, 201 after).
+  // A valid payload passes validation and reaches the business logic.
   const ok = await post({ studentId: 1, lines: [{ itemId: 2, quantity: 2 }] });
-  assert.ok([201, 409, 501].includes(ok.status), `unexpected ${ok.status}`);
+  assert.ok([201, 409].includes(ok.status), `unexpected ${ok.status}`);
 });
 
 test('Validation: invalid enums, IDs, long strings', async () => {

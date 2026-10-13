@@ -34,6 +34,25 @@ const pagination = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });
 
+/**
+ * Accepts alternative field names (e.g. Person 2's `items`, `condition`,
+ * `decision`) and renames them to the canonical contract names BEFORE the
+ * strict schema runs. If both are sent, the canonical one wins.
+ */
+function withAliases(schema, aliases) {
+  return z.preprocess((input) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+    const out = { ...input };
+    for (const [alias, canonical] of Object.entries(aliases)) {
+      if (alias in out) {
+        if (!(canonical in out)) out[canonical] = out[alias];
+        delete out[alias];
+      }
+    }
+    return out;
+  }, schema);
+}
+
 const ROLE = z.enum(['STUDENT', 'COORDINATOR']);
 const TRACKING_MODE = z.enum(['INDIVIDUAL', 'QUANTITY']);
 const CONDITION_STATUS = z.enum(['USABLE', 'DAMAGED', 'LOST', 'MAINTENANCE', 'RETIRED']);
@@ -51,6 +70,7 @@ module.exports = {
   isoDate,
   boolFromQuery,
   pagination,
+  withAliases,
   ROLE,
   TRACKING_MODE,
   CONDITION_STATUS,

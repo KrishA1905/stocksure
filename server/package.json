@@ -8,8 +8,9 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "test": "node --test --test-concurrency=1 \"tests/**/*.test.js\"",
-    "test:unit": "node --test tests/dueDate.test.js",
+    "test": "node scripts/prepare-test-db.js && node --test --test-concurrency=1 \"tests/**/*.test.js\"",
+    "test:only": "node --test --test-concurrency=1 \"tests/**/*.test.js\"",
+    "test:unit": "node --test tests/dueDate.test.js tests/dates.p2.test.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",

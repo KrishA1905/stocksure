@@ -8,12 +8,12 @@ Endpoint details are in [API_CONTRACT.md](API_CONTRACT.md).
 ```bash
 cd server
 npm install
-cp .env.example .env          # then set DATABASE_URL + SESSION_SECRET
+cp .env.example .env          # then set DATABASE_URL, DATABASE_URL_TEST + SESSION_SECRET
 npx prisma generate
 npx prisma migrate dev        # creates the DB + tables (also runs the seed)
 npx prisma db seed            # safe to re-run
 npm run dev                   # http://localhost:5000/api
-npm test                      # 34 tests (needs migrated + seeded DB)
+npm test                      # 70 tests - wipes + uses the separate DATABASE_URL_TEST database
 ```
 
 Generate a session secret:
@@ -112,7 +112,7 @@ Role-based UI: the frontend can hide menus based on `user.role`. **The backend s
 
 ## 3. For Person 2: how to plug in business logic
 
-Route files `inventory`, `assets`, `issues`, `returns`, `renewals` and `dashboard` under `src/routes/` already have the **final auth, RBAC and validation middleware**. Replace only the `notImplemented(...)` handler with your service call. Put the services in `src/services/<name>.service.js`.
+**Status: integrated.** Person 2's logic now lives in `src/services/{inventory,asset,issue,return,renewal,dashboard}.service.js`, with locking and stock helpers in `stock.helpers.js`. It sits behind the route files in `src/routes/`. Tests for it are in `tests/business.test.js`. Follow the patterns below when changing it.
 
 ### Shared tools (do not duplicate)
 
